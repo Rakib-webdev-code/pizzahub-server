@@ -1,7 +1,6 @@
 import { getDB } from "../config/db.js";
-import { CATEGORIES, MENU_STATUS, FREE_PLAN_ITEM_LIMIT } from "../utils/constants.js";
-import { isPremium, escapeRegex } from "../utils/helpers.js";
-
+import { CATEGORIES, MENU_STATUS, FREE_PLAN_ITEM_LIMIT, ROLES } from "../utils/constants.js";
+import { isPremium, escapeRegex, toObjectId } from "../utils/helpers.js";
 const items = () => getDB().collection("menuItems");
 
 export const createMenuItem = async (req, res) => {
@@ -168,4 +167,163 @@ export const getLocations = async (req, res) => {
     status: MENU_STATUS.APPROVED,
   });
   res.json({ success: true, locations: locations.sort() });
+};
+
+// Vendor: শুধু নিজের আইটেম
+export const getMyMenuItems = async (req, res) => {
+  const filter = { vendorId: req.user._id };
+  const status = str(req.query.status);
+  if (Object.values(MENU_STATUS).includes(status)) filter.status = status;
+
+  const list = await items()
+    .find(filter)
+    .project({ reviews: 0 })
+    .sort({ createdAt: -1 })
+    .toArray();
+
+  res.json({ success: true, items: list });
+};
+
+// যেকোনো লগইন করা ইউজার; approved ছাড়া শুধু মালিক ও admin দেখতে পারবে
+export const getMenuItemById = async (req, res) => {
+  const _id = toObjectId(req.params.id);
+  if (!_id) {
+    return res.status(400).json({ success: false, message: "Invalid item ID" });
+  }
+
+  const item = await items().findOne({ _id });
+  if (!item) {
+    return res.status(404).json({ success: false, message: "Menu item not found" });
+  }
+
+  const isOwner = String(item.vendorId) === req.user.id;
+  const isAdmin = req.user.role === ROLES.ADMIN;
+
+  const vendor = await getDB()
+    .collection("users")
+    .findOne(
+      { _id: item.vendorId },
+      {
+        projection: {
+          name: 1,
+          businessName: 1,
+          image: 1,
+          isBlocked: 1,
+          subscriptionPlan: 1,
+          subscriptionExpiresAt: 1,
+        },
+      }
+    );
+
+  const visibleToPublic =
+    item.status === MENU_STATUS.APPROVED && vendor && !vendor.isBlocked;
+
+  // অনুমতি না থাকলে অস্তিত্বই প্রকাশ করা হয় না
+  if (!visibleToPublic && !isOwner && !isAdmin) {
+    return res.status(404).json({ success: false, message: "Menu item not found" });
+  }
+
+  res.json({
+    success: true,
+    item: {
+      ...item,
+      vendor: vendor && {
+        _id: vendor._id,
+        name: vendor.name,
+        businessName: vendor.businessName,
+        image: vendor.image,
+        isPremium: isPremium(vendor),
+      },
+    },
+  });
+};
+
+// মালিকানা যাচাই: মিললে item, নইলে নিজেই response পাঠিয়ে null
+const getOwnedItem = async (req, res) => {
+  const _id = toObjectId(req.params.id);
+  if (!_id) {
+    res.status(400).json({ success: false, message: "Invalid item ID" });
+    return null;
+  }
+
+  const item = await items().findOne({ _id });
+  if (!item) {
+    res.status(404).json({ success: false, message: "Menu item not found" });
+    return null;
+  }
+
+  if (String(item.vendorId) !== req.user.id) {
+    res
+      .status(403)
+      .json({ success: false, message: "You can only modify your own menu items" });
+    return null;
+  }
+
+  return item;
+};
+
+// কনটেন্ট বদলালে আবার admin এর রিভিউয়ের জন্য pending হয়ে যায়
+export const updateMenuItem = async (req, res) => {
+  const item = await getOwnedItem(req, res);
+  if (!item) return;
+
+  await items().updateOne(
+    { _id: item._id },
+    {
+      $set: {
+        ...req.validated,
+        status: MENU_STATUS.PENDING,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  res.json({
+    success: true,
+    message: "Menu item updated and sent for re-approval",
+  });
+};
+
+// Available (approved) <-> Unavailable (inactive)
+export const setAvailability = async (req, res) => {
+  const item = await getOwnedItem(req, res);
+  if (!item) return;
+
+  if (![MENU_STATUS.APPROVED, MENU_STATUS.INACTIVE].includes(item.status)) {
+    return res.status(400).json({
+      success: false,
+      message: "Only approved or inactive items can change availability",
+    });
+  }
+
+  const { available } = req.validated;
+
+  if (available && !isPremium(req.user)) {
+    const activeCount = await items().countDocuments({
+      vendorId: req.user._id,
+      _id: { $ne: item._id },
+      status: { $in: [MENU_STATUS.PENDING, MENU_STATUS.APPROVED] },
+    });
+
+    if (activeCount >= FREE_PLAN_ITEM_LIMIT) {
+      return res.status(403).json({
+        success: false,
+        code: "PLAN_LIMIT_REACHED",
+        message: `Free plan allows up to ${FREE_PLAN_ITEM_LIMIT} active menu items. Upgrade to Premium.`,
+      });
+    }
+  }
+
+  const status = available ? MENU_STATUS.APPROVED : MENU_STATUS.INACTIVE;
+  await items().updateOne({ _id: item._id }, { $set: { status, updatedAt: new Date() } });
+
+  res.json({ success: true, message: "Availability updated", status });
+};
+
+export const deleteMenuItem = async (req, res) => {
+  const item = await getOwnedItem(req, res);
+  if (!item) return;
+
+  await items().deleteOne({ _id: item._id });
+  res.json({ success: true, message: "Menu item deleted" });
 };
