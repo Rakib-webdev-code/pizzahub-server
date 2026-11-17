@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { verifyJWT } from "./middleware/verifyJWT.js";
+import { notFound, errorHandler } from "./middleware/errorHandler.js";
 import userRoutes from "./routes/userRoutes.js";
 
 const app = express();
@@ -38,11 +39,14 @@ app.get("/", (req, res) => {
   res.json({ success: true, message: "PizzaHub server is running 🍕" });
 });
 
-// টোকেন ঠিক আছে কিনা টেস্ট করার জন্য
 app.get("/api/session-check", verifyJWT, (req, res) => {
   res.json({ success: true, auth: req.auth });
 });
 
 app.use("/api/users", userRoutes);
+
+// এই দুটো সবসময় সবার শেষে
+app.use(notFound);
+app.use(errorHandler);
 
 export default app;
