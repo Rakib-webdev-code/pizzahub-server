@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
+import { verifyJWT } from "./middleware/verifyJWT.js";
 
 const app = express();
 
@@ -34,6 +35,11 @@ app.use(cookieParser());
 
 app.get("/", (req, res) => {
   res.json({ success: true, message: "PizzaHub server is running 🍕" });
+});
+
+// টোকেন ঠিক আছে কিনা টেস্ট করার জন্য
+app.get("/api/session-check", verifyJWT, (req, res) => {
+  res.json({ success: true, auth: req.auth });
 });
 
 export default app;
