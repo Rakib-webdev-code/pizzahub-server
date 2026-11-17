@@ -6,3 +6,8 @@ export const toObjectId = (id) => {
   const oid = new ObjectId(id);
   return String(oid) === id ? oid : null;
 };
+
+export const isPremium = (user) =>
+  user?.subscriptionPlan === "premium" &&
+  (!user.subscriptionExpiresAt ||
+    new Date(user.subscriptionExpiresAt) > new Date());

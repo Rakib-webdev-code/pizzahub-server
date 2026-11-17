@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import { verifyJWT } from "./middleware/verifyJWT.js";
 import { notFound, errorHandler } from "./middleware/errorHandler.js";
 import userRoutes from "./routes/userRoutes.js";
+import menuRoutes from "./routes/menuRoutes.js";
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.get("/api/session-check", verifyJWT, (req, res) => {
 });
 
 app.use("/api/users", userRoutes);
+app.use("/api/menu", menuRoutes);
 
 // এই দুটো সবসময় সবার শেষে
 app.use(notFound);
