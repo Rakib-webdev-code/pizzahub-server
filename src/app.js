@@ -5,8 +5,7 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { verifyJWT } from "./middleware/verifyJWT.js";
 import { notFound, errorHandler } from "./middleware/errorHandler.js";
-import userRoutes from "./routes/userRoutes.js";
-import menuRoutes from "./routes/menuRoutes.js";
+import apiRoutes from "./routes/index.js";
 
 const app = express();
 
@@ -44,8 +43,7 @@ app.get("/api/session-check", verifyJWT, (req, res) => {
   res.json({ success: true, auth: req.auth });
 });
 
-app.use("/api/users", userRoutes);
-app.use("/api/menu-items", menuRoutes);
+app.use("/api", apiRoutes);
 
 // এই দুটো সবসময় সবার শেষে
 app.use(notFound);
