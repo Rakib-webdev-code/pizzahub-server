@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { verifyJWT } from "./middleware/verifyJWT.js";
+import userRoutes from "./routes/userRoutes.js";
 
 const app = express();
 
@@ -41,5 +42,7 @@ app.get("/", (req, res) => {
 app.get("/api/session-check", verifyJWT, (req, res) => {
   res.json({ success: true, auth: req.auth });
 });
+
+app.use("/api/users", userRoutes);
 
 export default app;
