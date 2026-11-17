@@ -6,3 +6,7 @@ export const menuStatusSchema = z.object({
   }),
   rejectionReason: z.string().trim().max(300).optional(),
 });
+
+export const blockSchema = z.object({
+  isBlocked: z.boolean({ message: "isBlocked must be true or false" }),
+});

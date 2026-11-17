@@ -1,6 +1,6 @@
 import { getDB } from "../config/db.js";
-import { CATEGORIES, MENU_STATUS } from "../utils/constants.js";
-import { escapeRegex, toObjectId } from "../utils/helpers.js";
+import { CATEGORIES, MENU_STATUS, ROLES } from "../utils/constants.js";
+import { escapeRegex, toObjectId, idFilter } from "../utils/helpers.js";;
 
 const items = () => getDB().collection("menuItems");
 const str = (v) => (typeof v === "string" ? v.trim() : "");
@@ -110,4 +110,118 @@ export const adminDeleteMenuItem = async (req, res) => {
   }
 
   res.json({ success: true, message: "Menu item deleted" });
+};
+
+const users = () => getDB().collection("users");
+
+const userProjection = {
+  name: 1,
+  email: 1,
+  image: 1,
+  role: 1,
+  isBlocked: 1,
+  businessName: 1,
+  subscriptionPlan: 1,
+  subscriptionExpiresAt: 1,
+  createdAt: 1,
+};
+
+// GET /api/admin/users?search=&role=&blocked=&page=&limit=
+export const getAllUsers = async (req, res) => {
+  const q = req.query;
+  const match = {};
+
+  const role = str(q.role);
+  if (Object.values(ROLES).includes(role)) match.role = role;
+
+  const blocked = str(q.blocked);
+  if (blocked === "true") match.isBlocked = true;
+  if (blocked === "false") match.isBlocked = { $ne: true };
+
+  const search = str(q.search);
+  if (search) {
+    const re = new RegExp(escapeRegex(search), "i");
+    match.$or = [{ name: re }, { email: re }];
+  }
+
+  const page = Math.max(parseInt(str(q.page)) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(str(q.limit)) || 10, 1), 50);
+
+  const [list, total] = await Promise.all([
+    users()
+      .find(match, { projection: userProjection })
+      .sort({ createdAt: -1, _id: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .toArray(),
+    users().countDocuments(match),
+  ]);
+
+  res.json({
+    success: true,
+    users: list,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  });
+};
+
+// GET /api/admin/users/:id
+export const getUserDetails = async (req, res) => {
+  const user = await users().findOne(idFilter(req.params.id), {
+    projection: userProjection,
+  });
+
+  if (!user) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  const orders = getDB().collection("orders");
+  let stats = {};
+
+  if (user.role === ROLES.VENDOR) {
+    const [menuItems, receivedOrders] = await Promise.all([
+      items().countDocuments({ vendorId: user._id }),
+      orders.countDocuments({ vendorId: user._id }),
+    ]);
+    stats = { menuItems, receivedOrders };
+  } else if (user.role === ROLES.CUSTOMER) {
+    stats = { placedOrders: await orders.countDocuments({ customerId: user._id }) };
+  }
+
+  res.json({ success: true, user, stats });
+};
+
+// PATCH /api/admin/users/:id/block  { isBlocked: true | false }
+export const setBlockStatus = async (req, res) => {
+  const { isBlocked } = req.validated;
+
+  const target = await users().findOne(idFilter(req.params.id), {
+    projection: { role: 1 },
+  });
+
+  if (!target) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  if (String(target._id) === req.user.id) {
+    return res
+      .status(400)
+      .json({ success: false, message: "You cannot block your own account" });
+  }
+
+  if (target.role === ROLES.ADMIN) {
+    return res
+      .status(403)
+      .json({ success: false, message: "Admin accounts cannot be blocked" });
+  }
+
+  await users().updateOne(
+    { _id: target._id },
+    { $set: { isBlocked, updatedAt: new Date() } }
+  );
+
+  res.json({
+    success: true,
+    message: isBlocked ? "User blocked" : "User unblocked",
+    isBlocked,
+  });
 };

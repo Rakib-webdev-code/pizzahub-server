@@ -26,3 +26,9 @@ export const createOrderSchema = z.object({
     .max(300),
   message: z.string().trim().max(500).optional().default(""),
 });
+
+export const decisionSchema = z.object({
+  action: z.enum(["accept", "reject"], {
+    message: "Action must be accept or reject",
+  }),
+});
