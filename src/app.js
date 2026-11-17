@@ -45,7 +45,7 @@ app.get("/api/session-check", verifyJWT, (req, res) => {
 });
 
 app.use("/api/users", userRoutes);
-app.use("/api/menu", menuRoutes);
+app.use("/api/menu-items", menuRoutes);
 
 // এই দুটো সবসময় সবার শেষে
 app.use(notFound);

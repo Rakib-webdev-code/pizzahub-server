@@ -11,3 +11,5 @@ export const isPremium = (user) =>
   user?.subscriptionPlan === "premium" &&
   (!user.subscriptionExpiresAt ||
     new Date(user.subscriptionExpiresAt) > new Date());
+
+    export const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
