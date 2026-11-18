@@ -222,3 +222,103 @@ export const stripeWebhook = async (req, res) => {
 
   res.json({ received: true });
 };
+
+/* ---------- Subscription পেজের জন্য ---------- */
+
+// Success পেজ: Premium কিন্তু webhook ই চালু করে, এখানে শুধু অবস্থা দেখানো হয়
+export const getCheckoutStatus = async (req, res) => {
+  const sessionId = String(req.params.sessionId || "");
+  if (!/^cs_[A-Za-z0-9_]+$/.test(sessionId)) {
+    return res.status(400).json({ success: false, message: "Invalid session ID" });
+  }
+
+  // শুধু নিজের transaction দেখা যাবে
+  const tx = await transactions().findOne({
+    stripeSessionId: sessionId,
+    vendorId: req.user._id,
+  });
+
+  res.json({
+    success: true,
+    paid: Boolean(tx),
+    transaction: tx
+      ? {
+          plan: tx.plan,
+          amount: tx.amount,
+          currency: tx.currency,
+          status: tx.status,
+          createdAt: tx.createdAt,
+        }
+      : null,
+    subscription: {
+      plan: isPremium(req.user) ? "premium" : "free",
+      expiresAt: req.user.subscriptionExpiresAt,
+    },
+  });
+};
+
+export const getSubscription = async (req, res) => {
+  const vendor = req.user;
+
+  const activeItems = await items().countDocuments({
+    vendorId: vendor._id,
+    status: { $in: [MENU_STATUS.PENDING, MENU_STATUS.APPROVED] },
+  });
+
+  let cancelAtPeriodEnd = false;
+  if (isPremium(vendor)) {
+    const tx = await transactions().findOne(
+      { vendorId: vendor._id, stripeSubscriptionId: { $ne: null } },
+      { sort: { createdAt: -1 } }
+    );
+    if (tx?.stripeSubscriptionId) {
+      try {
+        const sub = await getStripe().subscriptions.retrieve(tx.stripeSubscriptionId);
+        cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
+      } catch {
+        // Stripe এ না পেলেও পেজ যেন ভেঙে না যায়
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    subscription: {
+      plan: isPremium(vendor) ? "premium" : "free",
+      expiresAt: vendor.subscriptionExpiresAt,
+      cancelAtPeriodEnd,
+      activeItems,
+      itemLimit: isPremium(vendor) ? null : FREE_PLAN_ITEM_LIMIT,
+    },
+  });
+};
+
+// বর্তমান billing period শেষে বাতিল (তখন পর্যন্ত Premium থাকবে)
+export const cancelSubscription = async (req, res) => {
+  if (!isPremium(req.user)) {
+    return res
+      .status(400)
+      .json({ success: false, message: "You do not have an active Premium subscription" });
+  }
+
+  // শুধু এই vendor এর নিজের subscription
+  const tx = await transactions().findOne(
+    { vendorId: req.user._id, stripeSubscriptionId: { $ne: null } },
+    { sort: { createdAt: -1 } }
+  );
+
+  if (!tx) {
+    return res
+      .status(404)
+      .json({ success: false, message: "Subscription record not found" });
+  }
+
+  await getStripe().subscriptions.update(tx.stripeSubscriptionId, {
+    cancel_at_period_end: true,
+  });
+
+  res.json({
+    success: true,
+    message: "Your subscription will end at the end of the current billing period",
+  });
+};
