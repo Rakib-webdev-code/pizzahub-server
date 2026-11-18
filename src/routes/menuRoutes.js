@@ -1,11 +1,16 @@
 import { Router } from "express";
-import { requireAuth, requireVendor } from "../middleware/verifyRole.js";
+import {
+  requireAuth,
+  requireVendor,
+  requireCustomer,
+} from "../middleware/verifyRole.js";
 import { validate } from "../middleware/validate.js";
 import {
   createMenuItemSchema,
   updateMenuItemSchema,
   availabilitySchema,
 } from "../validators/menuSchemas.js";
+import { reviewSchema } from "../validators/reviewSchemas.js";
 import {
   createMenuItem,
   getMenuItems,
@@ -17,6 +22,11 @@ import {
   setAvailability,
   deleteMenuItem,
 } from "../controllers/menuController.js";
+import {
+  getReviewEligibility,
+  addReview,
+  deleteMyReview,
+} from "../controllers/reviewController.js";
 
 const router = Router();
 
@@ -31,6 +41,11 @@ router.post("/", requireVendor, validate(createMenuItemSchema), createMenuItem);
 
 // লগইন করা ইউজার
 router.get("/:id", requireAuth, getMenuItemById);
+
+// Reviews (Customer)
+router.get("/:id/review-eligibility", requireCustomer, getReviewEligibility);
+router.post("/:id/reviews", requireCustomer, validate(reviewSchema), addReview);
+router.delete("/:id/reviews", requireCustomer, deleteMyReview);
 
 // Vendor (শুধু মালিক)
 router.patch("/:id", requireVendor, validate(updateMenuItemSchema), updateMenuItem);
