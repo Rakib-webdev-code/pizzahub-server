@@ -19,3 +19,9 @@ export const idFilter = (id) => {
   const oid = toObjectId(id);
   return { _id: { $in: oid ? [oid, id] : [id] } };
 };
+
+export const escapeHtml = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );

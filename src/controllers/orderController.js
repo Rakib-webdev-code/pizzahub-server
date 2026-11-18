@@ -1,6 +1,7 @@
 import { getDB } from "../config/db.js";
 import { MENU_STATUS, ORDER_STATUS, ROLES } from "../utils/constants.js";
 import { toObjectId } from "../utils/helpers.js";
+import { sendOrderStatusEmail } from "../utils/mailer.js";
 
 const orders = () => getDB().collection("orders");
 
@@ -205,6 +206,24 @@ export const decideOrder = async (req, res) => {
     return res
       .status(409)
       .json({ success: false, message: "This order was already updated" });
+  }
+
+    // Email পাঠানো ব্যর্থ হলেও অর্ডারের কাজ যেন না আটকায়
+  try {
+    const customer = await getDB()
+      .collection("users")
+      .findOne({ _id: order.customerId }, { projection: { name: 1, email: 1 } });
+
+    await sendOrderStatusEmail({
+      to: customer?.email,
+      customerName: customer?.name || "there",
+      itemName: order.itemSnapshot?.itemName || "your item",
+      status,
+      restaurantName: req.user.businessName || req.user.name,
+      deliveryDate: order.deliveryDate,
+    });
+  } catch (err) {
+    console.error("Order email failed:", err.message);
   }
 
   res.json({ success: true, message: `Order ${status}`, status });
