@@ -1,5 +1,13 @@
 import { getStripe } from "../config/stripe.js";
-import { isPremium } from "../utils/helpers.js";
+import { getDB } from "../config/db.js";
+import { isPremium, idFilter } from "../utils/helpers.js";
+import { MENU_STATUS, FREE_PLAN_ITEM_LIMIT } from "../utils/constants.js";
+
+const users = () => getDB().collection("users");
+const items = () => getDB().collection("menuItems");
+const transactions = () => getDB().collection("transactions");
+
+/* ---------- Checkout session তৈরি ---------- */
 
 export const createCheckoutSession = async (req, res) => {
   const vendor = req.user; // টোকেন থেকে পাওয়া, body থেকে কখনো নয়
@@ -43,4 +51,174 @@ export const createCheckoutSession = async (req, res) => {
   });
 
   res.json({ success: true, url: session.url, sessionId: session.id });
+};
+
+/* ---------- Webhook ---------- */
+
+// নতুন ও পুরোনো Stripe API দুই ভার্সনেই কাজ করে
+const periodEnd = (subscription) => {
+  const ts =
+    subscription.current_period_end ??
+    subscription.items?.data?.[0]?.current_period_end;
+  return ts
+    ? new Date(ts * 1000)
+    : new Date(Date.now() + 31 * 24 * 60 * 60 * 1000);
+};
+
+const activatePremium = (vendorId, expiresAt) =>
+  users().updateOne(
+    { _id: vendorId },
+    {
+      $set: {
+        subscriptionPlan: "premium",
+        subscriptionExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+// stripeSessionId এর উপর upsert, তাই একই event দুবার এলেও transaction একটাই হবে
+const saveTransaction = (data) =>
+  transactions().updateOne(
+    { stripeSessionId: data.stripeSessionId },
+    { $setOnInsert: { ...data, createdAt: new Date() } },
+    { upsert: true }
+  );
+
+const handleCheckoutCompleted = async (session) => {
+  if (session.mode !== "subscription" || session.payment_status !== "paid") return;
+
+  // metadata আমাদের server ই বসিয়েছে, আর signature verified, তাই বিশ্বাসযোগ্য
+  const vendorId = session.metadata?.vendorId;
+  const vendor = vendorId ? await users().findOne(idFilter(vendorId)) : null;
+
+  if (!vendor || vendor.role !== "vendor") {
+    console.warn("Webhook: vendor not found for session", session.id);
+    return;
+  }
+
+  const subscription = await getStripe().subscriptions.retrieve(session.subscription);
+  const expiresAt = periodEnd(subscription);
+
+  await saveTransaction({
+    vendorId: vendor._id,
+    plan: "premium",
+    amount: (session.amount_total || 0) / 100,
+    currency: session.currency,
+    stripeSessionId: session.id,
+    stripeSubscriptionId: session.subscription,
+    status: "paid",
+  });
+
+  await activatePremium(vendor._id, expiresAt);
+};
+
+// মাসিক renewal
+const handleInvoicePaid = async (invoice) => {
+  if (invoice.billing_reason !== "subscription_cycle") return;
+
+  const subscriptionId =
+    invoice.subscription ?? invoice.parent?.subscription_details?.subscription;
+  if (!subscriptionId) return;
+
+  const previous = await transactions().findOne(
+    { stripeSubscriptionId: subscriptionId },
+    { sort: { createdAt: -1 } }
+  );
+  if (!previous) return;
+
+  const subscription = await getStripe().subscriptions.retrieve(subscriptionId);
+
+  await saveTransaction({
+    vendorId: previous.vendorId,
+    plan: "premium",
+    amount: (invoice.amount_paid || 0) / 100,
+    currency: invoice.currency,
+    stripeSessionId: `invoice_${invoice.id}`,
+    stripeSubscriptionId: subscriptionId,
+    status: "paid",
+  });
+
+  await activatePremium(previous.vendorId, periodEnd(subscription));
+};
+
+// Subscription শেষ বা বাতিল: free এ নামানো, ৩টার বেশি active আইটেম inactive করা
+const handleSubscriptionDeleted = async (subscription) => {
+  const vendorId = subscription.metadata?.vendorId;
+  if (!vendorId) return;
+
+  const vendor = await users().findOne(idFilter(vendorId));
+  if (!vendor) return;
+
+  await users().updateOne(
+    { _id: vendor._id },
+    {
+      $set: {
+        subscriptionPlan: "free",
+        subscriptionExpiresAt: new Date(),
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  const extra = await items()
+    .find({
+      vendorId: vendor._id,
+      status: { $in: [MENU_STATUS.PENDING, MENU_STATUS.APPROVED] },
+    })
+    .sort({ createdAt: 1 })
+    .skip(FREE_PLAN_ITEM_LIMIT)
+    .project({ _id: 1 })
+    .toArray();
+
+  if (extra.length) {
+    await items().updateMany(
+      { _id: { $in: extra.map((i) => i._id) } },
+      { $set: { status: MENU_STATUS.INACTIVE, updatedAt: new Date() } }
+    );
+  }
+};
+
+export const stripeWebhook = async (req, res) => {
+  const signature = req.headers["stripe-signature"];
+  if (!signature) {
+    return res.status(400).send("Missing Stripe signature");
+  }
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    return res.status(500).send("Webhook secret is not configured");
+  }
+
+  let event;
+  try {
+    // req.body এখানে raw Buffer (app.js এ express.raw দিয়ে)
+    event = getStripe().webhooks.constructEvent(
+      req.body,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    switch (event.type) {
+      case "checkout.session.completed":
+        await handleCheckoutCompleted(event.data.object);
+        break;
+      case "invoice.paid":
+        await handleInvoicePaid(event.data.object);
+        break;
+      case "customer.subscription.deleted":
+        await handleSubscriptionDeleted(event.data.object);
+        break;
+      default:
+        break;
+    }
+  } catch (err) {
+    console.error("Webhook handler failed:", err);
+    // 500 দিলে Stripe নিজে থেকে আবার পাঠাবে (আমাদের handler idempotent)
+    return res.status(500).send("Webhook handler failed");
+  }
+
+  res.json({ received: true });
 };

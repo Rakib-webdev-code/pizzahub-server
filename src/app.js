@@ -5,9 +5,13 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { verifyJWT } from "./middleware/verifyJWT.js";
 import { notFound, errorHandler } from "./middleware/errorHandler.js";
+import { stripeWebhook } from "./controllers/paymentController.js";
 import apiRoutes from "./routes/index.js";
 
 const app = express();
+
+// Vercel/Render এর proxy এর পেছনে সঠিক IP পেতে (rate limit এর জন্য)
+app.set("trust proxy", 1);
 
 app.use(helmet());
 
@@ -29,8 +33,12 @@ app.use(
   })
 );
 
-// NOTE: Stripe webhook route will be mounted BEFORE express.json()
-// because it needs the raw request body.
+// Stripe webhook: অবশ্যই express.json() এর আগে, কারণ raw body লাগে
+app.post(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  stripeWebhook
+);
 
 app.use(express.json());
 app.use(cookieParser());
