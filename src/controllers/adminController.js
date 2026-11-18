@@ -225,3 +225,57 @@ export const setBlockStatus = async (req, res) => {
     isBlocked,
   });
 };
+
+// GET /api/admin/transactions?status=&page=&limit=  (কোনো edit API নেই, ইচ্ছাকৃত)
+export const getTransactions = async (req, res) => {
+  const match = {};
+  const status = str(req.query.status);
+  if (status) match.status = status;
+
+  const page = Math.max(parseInt(str(req.query.page)) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(str(req.query.limit)) || 10, 1), 50);
+
+  const [result] = await getDB()
+    .collection("transactions")
+    .aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1, _id: 1 } },
+      {
+        $facet: {
+          data: [
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $lookup: {
+                from: "users",
+                localField: "vendorId",
+                foreignField: "_id",
+                as: "vendor",
+              },
+            },
+            { $unwind: { path: "$vendor", preserveNullAndEmptyArrays: true } },
+            {
+              $addFields: {
+                vendor: {
+                  _id: "$vendor._id",
+                  name: "$vendor.name",
+                  email: "$vendor.email",
+                  businessName: "$vendor.businessName",
+                },
+              },
+            },
+          ],
+          total: [{ $count: "count" }],
+        },
+      },
+    ])
+    .toArray();
+
+  const total = result.total[0]?.count || 0;
+
+  res.json({
+    success: true,
+    transactions: result.data,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  });
+};

@@ -9,6 +9,7 @@ import {
   getAllUsers,
   getUserDetails,
   setBlockStatus,
+  getTransactions,
 } from "../controllers/adminController.js";
 
 const router = Router();
@@ -25,5 +26,8 @@ router.patch("/users/:id/block", validate(blockSchema), setBlockStatus);
 router.get("/menu-items", getAllMenuItems);
 router.patch("/menu-items/:id/status", validate(menuStatusSchema), updateMenuItemStatus);
 router.delete("/menu-items/:id", adminDeleteMenuItem);
+
+// ট্রানজেকশন (শুধু পড়া)
+router.get("/transactions", getTransactions);
 
 export default router;
